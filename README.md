@@ -11,6 +11,7 @@ rupai/
 ├── backend/                   FastAPI (see backend/README.md)
 ├── frontend/                  React + Vite (see frontend/README.md)
 ├── comfy/t2i_workflow.json    ComfyUI workflow template
+├── scripts/release.ps1        publish a release from your PC (same checks as CI)
 └── notebook/
     ├── rupai.ipynb            run the app on Colab
     └── m1_spike.ipynb         M1 benchmark (speed, VRAM, RAM)
@@ -18,16 +19,22 @@ rupai/
 
 ## One-time setup
 
-1. **Create the repository** on GitHub: `praksambaths/rupai`, **private**, no README.
+1. **Create the repository** on GitHub: `sambathprak789/rupai`, **private**, no README.
 2. **Push the code** (PowerShell, in the `rupai` folder):
    ```powershell
    git init -b main
    git add .
    git commit -m "RupAI M1-M4"
-   git remote add origin https://github.com/praksambaths/rupai.git
+   git remote add origin https://github.com/sambathprak789/rupai.git
    git push -u origin main
    ```
-3. **Check CI**: GitHub → Actions → "CI" must be green. It then creates a release named `build-1` with `dist.zip`.
+3. **Publish a release** (the notebook needs one):
+   - With GitHub Actions: Actions → "CI" must be green; it then creates release `build-N` with `dist.zip`.
+   - Without Actions (for example while the account has a billing lock): run the same checks and publish from your PC.
+     Needs the GitHub CLI once: `winget install GitHub.cli`, then `gh auth login`.
+     ```powershell
+     .\scripts\release.ps1
+     ```
 4. **Create a token for Colab**: GitHub → Settings → Developer settings → Fine-grained tokens → Generate.
    Repository access: *Only select repositories* → `rupai`. Permissions: *Contents: Read-only*. Nothing else.
 5. **Colab secrets** (open `notebook/rupai.ipynb` in Colab, key icon on the left):
@@ -40,5 +47,5 @@ rupai/
 Colab → upload or open `notebook/rupai.ipynb` → Runtime → Change runtime type → **T4 GPU** → **Run all** →
 click **Open RupAI** in step 10.
 
-Every push to `main` that passes CI makes a new release; the notebook uses the newest one
-(`RELEASE_TAG = "latest"`) or a fixed tag such as `build-12`.
+Every push to `main` that passes CI (or every `scripts/release.ps1` run) makes a new release; the notebook uses the newest one
+(`RELEASE_TAG = "latest"`) or a fixed tag such as `build-12` or `build-20261121-0636`.
