@@ -1,11 +1,12 @@
-import { Download, ImageIcon, Loader2 } from 'lucide-react'
+import { ImageIcon, Loader2 } from 'lucide-react'
 
 import { Badge } from '@/components/ui/badge'
-import { Button } from '@/components/ui/button'
 import { Progress } from '@/components/ui/progress'
 import type { GeneratedImage, Job, Preview } from '@/lib/types'
 import { isFinished } from '@/lib/types'
 import { formatDuration } from '@/lib/utils'
+
+import { ImageActions, type ImageActionHandlers } from '@/features/gallery/ImageActions'
 
 import { remaining, useNow } from './useCountdown'
 
@@ -19,32 +20,44 @@ function timeLeft(seconds: number | null) {
   return seconds < 1 ? 'almost done…' : `≈ ${formatDuration(seconds)} left`
 }
 
-function ImageCard({ image }: { image: GeneratedImage }) {
+function ImageCard({
+  image,
+  onOpen,
+  actions,
+}: {
+  image: GeneratedImage
+  onOpen: (id: string) => void
+  actions: ImageActionHandlers
+}) {
   return (
     <figure
       className="flex flex-col overflow-hidden rounded-xl border bg-card"
       style={fitWidth(image.width, image.height)}
     >
-      <img
-        src={image.url}
-        alt={`Generated image, seed ${image.seed}`}
-        width={image.width}
-        height={image.height}
-        className="h-auto w-full bg-muted"
-        style={{ aspectRatio: `${image.width} / ${image.height}` }}
-      />
-      <figcaption className="flex items-center justify-between gap-2 border-t p-3">
+      <button
+        type="button"
+        onClick={() => onOpen(image.id)}
+        className="cursor-zoom-in"
+        title="Open full size"
+        aria-label={`Open full size, seed ${image.seed}`}
+      >
+        <img
+          src={image.url}
+          alt={`Generated image, seed ${image.seed}`}
+          width={image.width}
+          height={image.height}
+          className="h-auto w-full bg-muted"
+          style={{ aspectRatio: `${image.width} / ${image.height}` }}
+        />
+      </button>
+      <figcaption className="flex flex-wrap items-center justify-between gap-2 border-t p-3">
         <div className="flex items-center gap-2 text-xs text-muted-foreground">
           <Badge variant={image.mode === 'quality' ? 'default' : 'secondary'} className="capitalize">
             {image.mode}
           </Badge>
           seed {image.seed}
         </div>
-        <Button asChild size="sm" variant="secondary">
-          <a href={image.url} download={image.filename}>
-            <Download /> Download
-          </a>
-        </Button>
+        <ImageActions image={image} {...actions} />
       </figcaption>
     </figure>
   )
@@ -74,7 +87,11 @@ function ActiveCard({ job, preview, now }: { job: Job; preview: Preview | null; 
           />
         ) : (
           <div className="absolute inset-0 flex animate-pulse items-center justify-center text-sm text-muted-foreground">
-            {started ? 'Waiting for preview…' : 'Starting… (loading the model can take a minute)'}
+            {job.status === 'queued'
+              ? 'Waiting for the model to warm up…'
+              : started
+                ? 'Waiting for preview…'
+                : 'Starting… (loading the model can take a minute)'}
           </div>
         )}
       </div>
@@ -99,7 +116,14 @@ function ActiveCard({ job, preview, now }: { job: Job; preview: Preview | null; 
   )
 }
 
-export function ResultPanel({ job, preview }: { job: Job | null; preview: Preview | null }) {
+interface ResultPanelProps {
+  job: Job | null
+  preview: Preview | null
+  onOpen: (imageId: string) => void
+  actions: ImageActionHandlers
+}
+
+export function ResultPanel({ job, preview, onOpen, actions }: ResultPanelProps) {
   const running = !!job && !isFinished(job.status)
   const now = useNow(running)
 
@@ -134,7 +158,7 @@ export function ResultPanel({ job, preview }: { job: Job | null; preview: Previe
 
       <div className={job.count > 1 ? 'grid items-start gap-4 sm:grid-cols-2' : 'flex flex-col items-start gap-4'}>
         {job.images.map((img) => (
-          <ImageCard key={img.id} image={img} />
+          <ImageCard key={img.id} image={img} onOpen={onOpen} actions={actions} />
         ))}
         {running && <ActiveCard job={job} preview={preview} now={now} />}
         {Array.from({ length: Math.max(0, waiting) }, (_, i) => (

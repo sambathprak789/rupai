@@ -53,7 +53,9 @@ def create_app(settings: Settings | None = None, engine: Engine | None = None) -
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
-        log.info("RupAI backend up (mock=%s, quant=%s)", s.mock, s.model_quant)
+        log.info("RupAI backend up (mock=%s, quant=%s, warmup=%s)", s.mock, s.model_quant, s.warmup)
+        if s.warmup:
+            service.start_warmup()
         yield
         await service.shutdown()
         await eng.close()
@@ -90,6 +92,7 @@ def create_app(settings: Settings | None = None, engine: Engine | None = None) -
             comfy=info.get("comfy", "offline"),
             model_quant=s.model_quant,
             busy=service.busy,
+            warming=service.warming,
             vram_total_gb=info.get("vram_total_gb"),
             vram_free_gb=info.get("vram_free_gb"),
             ram_total_gb=round(mem.total / 1e9, 1),

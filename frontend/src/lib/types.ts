@@ -17,7 +17,9 @@ export interface Progress {
 
 /** WebSocket /api/ws events */
 export type StreamEvent =
-  { type: 'job'; job: Job } | { type: 'preview'; jobId: string; imageIndex: number; step: number; dataUrl: string }
+  | { type: 'status'; warming: boolean }
+  | { type: 'job'; job: Job }
+  | { type: 'preview'; jobId: string; imageIndex: number; step: number; dataUrl: string }
 
 export interface Preview {
   imageIndex: number
@@ -77,6 +79,7 @@ export interface Health {
   comfy: 'ready' | 'offline'
   modelQuant: string
   busy: boolean
+  warming: boolean
   vramTotalGb: number | null
   vramFreeGb: number | null
   ramTotalGb: number | null

@@ -30,6 +30,7 @@ class Settings:
     static_dir: Path | None = None
     cookie_secure: bool = True
     mock_step_delay: float = 0.3
+    warmup: bool = False  # load the models with a hidden 1-step job at startup (M7)
     # auth rate limit (Item 6.4)
     max_failures: int = 10
     failure_window_s: int = 60
@@ -52,4 +53,5 @@ class Settings:
             text_encoder_file=os.environ.get("TEXT_ENCODER_FILE", cls.text_encoder_file),
             static_dir=Path(static) if static else None,
             cookie_secure=_bool(os.environ.get("COOKIE_SECURE"), True),
+            warmup=_bool(os.environ.get("WARMUP"), False),
         )

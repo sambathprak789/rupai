@@ -154,6 +154,7 @@ class Health(ApiModel):
     comfy: str  # "ready" | "offline"
     model_quant: str
     busy: bool
+    warming: bool = False
     vram_total_gb: float | None = None
     vram_free_gb: float | None = None
     ram_total_gb: float | None = None

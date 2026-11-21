@@ -36,7 +36,7 @@ def test_ws_streams_job_steps_and_previews(tmp_path):
                     jobs.append(ev["job"])
                     if ev["job"]["status"] == "done":
                         break
-                else:
+                elif ev["type"] == "preview":
                     previews.append(ev)
     assert all(j["id"] == job["id"] for j in jobs)
     # every step of both images was reported, in order (an extra event repeats the last step when an image is saved)
@@ -61,6 +61,7 @@ def test_ws_snapshot_for_late_client(tmp_path):
         c.post("/api/auth", json={"key": KEY})
         job = c.post("/api/jobs", json={"prompt": "mug"}).json()
         with c.websocket_connect("/api/ws", headers=BEARER) as ws:  # connects after the job started
+            assert ws.receive_json() == {"type": "status", "warming": False}
             first = ws.receive_json()
             assert first["type"] == "job" and first["job"]["id"] == job["id"]
 

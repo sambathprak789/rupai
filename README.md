@@ -5,6 +5,17 @@ A FastAPI backend serves the React UI and the API, and a Cloudflare quick tunnel
 
 Model license: Qwen Research License (non-commercial research and evaluation only).
 
+Free Colab note: Colab's FAQ lists "bypassing the notebook UI to interact primarily via a web UI" as not allowed on free
+runtimes, so a session can be stopped without warning. Keep the Colab tab open; if the app goes offline, Run all again.
+
+## Features
+
+- Fast (8 steps, Turbo LoRA, 1–4 images, ~3–4 min each on T4) and Quality (10–60 steps, 1 image) modes
+- Live preview after every step, per-image and whole-job countdown, Cancel
+- Seed, steps and CFG settings; sizes 1:1, 16:9, 9:16
+- Session gallery with lightbox, Reuse and Render in Quality
+- Background warm-up so the first image does not wait for the model load
+
 ```
 rupai/
 ├── .github/workflows/ci.yml   lint + tests; on main: build the frontend and publish release build-N with dist.zip

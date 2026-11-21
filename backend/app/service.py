@@ -13,7 +13,7 @@ from pathlib import Path
 
 from .engine import Engine, EngineError
 from .eta import EtaModel, ImageTimer
-from .models import SEED_MAX, SIZES, Image, Job, JobCreate, Mode, Status, now
+from .models import SEED_MAX, SIZES, Aspect, Image, Job, JobCreate, Mode, Status, now
 from .workflow import RenderParams
 
 SUBSCRIBER_QUEUE = 64
@@ -44,6 +44,11 @@ class JobService:
         self._tasks: dict[str, asyncio.Task] = {}
         self.eta = EtaModel()
         self.latest_preview: dict | None = None  # last preview event of the active job
+        # One render at a time on the GPU: the warm-up and user jobs take turns
+        self._gpu = asyncio.Lock()
+        self.rendering_job_id: str | None = None
+        self.warming = False
+        self._warmup_task: asyncio.Task | None = None
         self._subscribers: set[asyncio.Queue] = set()
         output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -69,11 +74,15 @@ class JobService:
     def _publish_job(self, job: Job) -> None:
         self._publish({"type": "job", "job": job.model_dump(by_alias=True, mode="json")})
 
+    def _publish_status(self) -> None:
+        self._publish({"type": "status", "warming": self.warming})
+
     def snapshot(self) -> list[dict]:
         """Events a new WebSocket client needs to catch up with the active job."""
+        events: list[dict] = [{"type": "status", "warming": self.warming}]
         if self.active_id is None:
-            return []
-        events = [{"type": "job", "job": self.jobs[self.active_id].model_dump(by_alias=True, mode="json")}]
+            return events
+        events.append({"type": "job", "job": self.jobs[self.active_id].model_dump(by_alias=True, mode="json")})
         if self.latest_preview:
             events.append(self.latest_preview)
         return events
@@ -122,7 +131,8 @@ class JobService:
         job = self.get_job(job_id)
         if job.id != self.active_id:
             raise NotRunning(f"job {job_id} is not running")
-        await self.engine.interrupt()
+        if self.rendering_job_id == job.id:
+            await self.engine.interrupt()  # a job still waiting for the warm-up only needs its task stopped
         task = self._tasks.get(job.id)
         if task and not task.done():
             task.cancel()
@@ -130,9 +140,45 @@ class JobService:
         return job
 
     async def shutdown(self) -> None:
-        for task in self._tasks.values():
+        tasks = [*self._tasks.values(), *([self._warmup_task] if self._warmup_task else [])]
+        for task in tasks:
             task.cancel()
-        await asyncio.gather(*self._tasks.values(), return_exceptions=True)
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+    # ---- warm-up (M7) ------------------------------------------------------------------
+
+    def start_warmup(self) -> None:
+        self.warming = True
+        self._warmup_task = asyncio.create_task(self._warmup())
+
+    async def _warmup(self) -> None:
+        """Hidden 1-step Fast render so the first real job finds the models already loaded."""
+        log.info("warm-up started")
+        try:
+            async with self._gpu:
+                timer = ImageTimer(self.eta, Mode.FAST, Aspect.SQUARE, steps=1, started=time.monotonic())
+                width, height = SIZES[Aspect.SQUARE]
+                params = RenderParams(
+                    prompt="warm-up",
+                    negative_prompt=" ",
+                    width=width,
+                    height=height,
+                    seed=0,
+                    steps=1,
+                    cfg=1.0,
+                    lora=self.fast_lora,
+                    filename_prefix="tmp_warmup",
+                )
+                raw = await self.engine.render(params, lambda step, _t: timer.on_step(step, time.monotonic()))
+                raw.unlink(missing_ok=True)  # never shown in the gallery
+            log.info("warm-up done (model load %.0f s)", self.eta.start_s["cold"])
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:  # a failed warm-up only means the first job loads the model itself
+            log.warning("warm-up failed: %s", e)
+        finally:
+            self.warming = False
+            self._publish_status()
 
     def _update_eta(self, job: Job, timer: ImageTimer) -> None:
         t = time.monotonic()
@@ -144,53 +190,12 @@ class JobService:
         job.progress.updated_at = now()
 
     async def _run(self, job: Job) -> None:
-        job.status = Status.RUNNING
+        self._publish_job(job)  # queued: may wait here for the warm-up
         try:
-            for index in range(job.count):
-                seed = (job.base_seed + index) % (SEED_MAX + 1)
-                job.progress.image_index = index
-                job.progress.step = 0
-                job.progress.total_steps = job.steps
-                self.latest_preview = None
-                timer = ImageTimer(self.eta, job.mode, job.aspect, job.steps, started=time.monotonic())
-                self._update_eta(job, timer)
-                self._publish_job(job)
-                params = RenderParams(
-                    prompt=job.prompt,
-                    negative_prompt=job.negative_prompt,
-                    width=job.width,
-                    height=job.height,
-                    seed=seed,
-                    steps=job.steps,
-                    cfg=job.cfg,
-                    lora=self.fast_lora if job.mode is Mode.FAST else None,
-                    filename_prefix=f"tmp_{job.id}_{index}",
-                )
-
-                def on_step(step: int, total: int, timer=timer, index=index) -> None:
-                    timer.on_step(step, time.monotonic())
-                    job.progress.image_index = index
-                    job.progress.step = step
-                    job.progress.total_steps = total
-                    self._update_eta(job, timer)
-                    self._publish_job(job)
-
-                def on_preview(data: bytes, mime: str, index=index) -> None:
-                    event = {
-                        "type": "preview",
-                        "jobId": job.id,
-                        "imageIndex": index,
-                        "step": job.progress.step,
-                        "dataUrl": f"data:{mime};base64,{base64.b64encode(data).decode()}",
-                    }
-                    self.latest_preview = event
-                    self._publish(event)
-
-                raw = await self.engine.render(params, on_step, on_preview)
-                timer.finish(time.monotonic())
-                job.images.append(self._store_image(job, index, seed, raw))
-                self.latest_preview = None
-                self._publish_job(job)
+            async with self._gpu:
+                self.rendering_job_id = job.id
+                job.status = Status.RUNNING
+                await self._render_all(job)
             job.status = Status.DONE
         except asyncio.CancelledError:
             job.status = Status.CANCELLED
@@ -202,9 +207,57 @@ class JobService:
             job.status = Status.FAILED
             job.error = "Internal error - run the 'Show logs' cell in the notebook"
         finally:
+            self.rendering_job_id = None
             job.finished_at = now()
             job.progress.image_eta_s = job.progress.job_eta_s = None
             self.active_id = None
+            self.latest_preview = None
+            self._publish_job(job)
+
+    async def _render_all(self, job: Job) -> None:
+        for index in range(job.count):
+            seed = (job.base_seed + index) % (SEED_MAX + 1)
+            job.progress.image_index = index
+            job.progress.step = 0
+            job.progress.total_steps = job.steps
+            self.latest_preview = None
+            timer = ImageTimer(self.eta, job.mode, job.aspect, job.steps, started=time.monotonic())
+            self._update_eta(job, timer)
+            self._publish_job(job)
+            params = RenderParams(
+                prompt=job.prompt,
+                negative_prompt=job.negative_prompt,
+                width=job.width,
+                height=job.height,
+                seed=seed,
+                steps=job.steps,
+                cfg=job.cfg,
+                lora=self.fast_lora if job.mode is Mode.FAST else None,
+                filename_prefix=f"tmp_{job.id}_{index}",
+            )
+
+            def on_step(step: int, total: int, timer=timer, index=index) -> None:
+                timer.on_step(step, time.monotonic())
+                job.progress.image_index = index
+                job.progress.step = step
+                job.progress.total_steps = total
+                self._update_eta(job, timer)
+                self._publish_job(job)
+
+            def on_preview(data: bytes, mime: str, index=index) -> None:
+                event = {
+                    "type": "preview",
+                    "jobId": job.id,
+                    "imageIndex": index,
+                    "step": job.progress.step,
+                    "dataUrl": f"data:{mime};base64,{base64.b64encode(data).decode()}",
+                }
+                self.latest_preview = event
+                self._publish(event)
+
+            raw = await self.engine.render(params, on_step, on_preview)
+            timer.finish(time.monotonic())
+            job.images.append(self._store_image(job, index, seed, raw))
             self.latest_preview = None
             self._publish_job(job)
 

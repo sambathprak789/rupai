@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { toast } from 'sonner'
 
 import { api, ApiError } from '@/lib/api'
@@ -13,32 +13,43 @@ function streamUrl() {
 }
 
 /**
- * Creates jobs and follows them live over WebSocket /api/ws (job state + a preview after every step).
- * Falls back to polling while the socket is down. `onAuthLost` runs when the server closes with 4401.
+ * All jobs of this Colab session, the one being shown, and live updates over WebSocket /api/ws
+ * (job state, a preview after every step, warm-up status). Falls back to polling while the socket is down.
+ * `onAuthLost` runs when the server closes the socket with 4401/4429.
  */
 export function useGenerate(onAuthLost: () => void) {
-  const [job, setJob] = useState<Job | null>(null)
+  const [jobsById, setJobsById] = useState<Record<string, Job>>({})
+  const [currentId, setCurrentId] = useState<string | null>(null)
   const [preview, setPreview] = useState<(Preview & { jobId: string }) | null>(null)
+  const [warming, setWarming] = useState(false)
   const [connected, setConnected] = useState(false)
   const [submitting, setSubmitting] = useState(false)
-  const lastFailedId = useRef<string | null>(null)
+  const [failedShown] = useState(() => new Set<string>())
 
+  const job = currentId ? (jobsById[currentId] ?? null) : null
   const running = !!job && !isFinished(job.status)
 
-  const acceptJob = useCallback((next: Job) => {
-    // Follow the current job, or switch to a newer one that is running
-    setJob((prev) => (!prev || prev.id === next.id || !isFinished(next.status) ? next : prev))
-    if (next.status === 'failed' && lastFailedId.current !== next.id) {
-      lastFailedId.current = next.id
-      toast.error(next.error ?? 'Generation failed')
-    }
-  }, [])
+  const acceptJob = useCallback(
+    (next: Job) => {
+      setJobsById((all) => ({ ...all, [next.id]: next }))
+      // Follow the shown job, or switch to a newer one that is running (e.g. started in another tab)
+      setCurrentId((cur) => (cur === null || cur === next.id || !isFinished(next.status) ? next.id : cur))
+      if (next.status === 'failed' && !failedShown.has(next.id)) {
+        failedShown.add(next.id)
+        toast.error(next.error ?? 'Generation failed')
+      }
+    },
+    [failedShown],
+  )
 
-  // After a reload: show the newest job
+  // After a reload: the whole session history, newest job shown
   useEffect(() => {
     api
       .listJobs()
-      .then((jobs) => jobs.length > 0 && setJob((current) => current ?? jobs[0]))
+      .then((jobs) => {
+        setJobsById((all) => Object.fromEntries([...jobs.map((j) => [j.id, j] as const), ...Object.entries(all)]))
+        if (jobs.length > 0) setCurrentId((cur) => cur ?? jobs[0].id)
+      })
       .catch(() => {})
   }, [])
 
@@ -57,8 +68,9 @@ export function useGenerate(onAuthLost: () => void) {
       }
       ws.onmessage = (msg) => {
         const ev = JSON.parse(msg.data) as StreamEvent
+        if (ev.type === 'status') setWarming(ev.warming)
         // Count down from the moment we received the estimate, so a wrong PC clock does not matter
-        if (ev.type === 'job')
+        else if (ev.type === 'job')
           acceptJob({ ...ev.job, progress: { ...ev.job.progress, updatedAt: new Date().toISOString() } })
         else setPreview({ jobId: ev.jobId, imageIndex: ev.imageIndex, step: ev.step, dataUrl: ev.dataUrl })
       }
@@ -88,8 +100,8 @@ export function useGenerate(onAuthLost: () => void) {
       try {
         acceptJob(await api.getJob(job.id))
       } catch (e) {
-        if (e instanceof ApiError && e.status === 404) setJob(null)
-        else setJob((j) => (j ? { ...j } : j)) // try again on the next tick
+        if (e instanceof ApiError && e.status === 404) setCurrentId(null)
+        else setJobsById((all) => ({ ...all })) // try again on the next tick
       }
     }, FALLBACK_POLL_MS)
     return () => window.clearTimeout(timer)
@@ -100,7 +112,9 @@ export function useGenerate(onAuthLost: () => void) {
       setSubmitting(true)
       try {
         setPreview(null)
-        acceptJob(await api.createJob(body))
+        const created = await api.createJob(body)
+        acceptJob(created)
+        setCurrentId(created.id)
       } catch (e) {
         const msg = e instanceof ApiError ? e.message : 'Could not start the job'
         toast.error(e instanceof ApiError && e.status === 409 ? 'A job is already running' : msg)
@@ -122,6 +136,9 @@ export function useGenerate(onAuthLost: () => void) {
     }
   }, [job, acceptJob])
 
+  /** Newest first */
+  const jobs = useMemo(() => Object.values(jobsById).sort((a, b) => b.createdAt.localeCompare(a.createdAt)), [jobsById])
+
   const currentPreview = preview && job && preview.jobId === job.id ? preview : null
-  return { job, preview: currentPreview, running, submitting, connected, generate, cancel }
+  return { job, jobs, preview: currentPreview, running, warming, submitting, connected, generate, cancel }
 }

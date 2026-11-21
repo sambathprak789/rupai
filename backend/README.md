@@ -48,8 +48,9 @@ ruff format --check .
 | `TEXT_ENCODER_FILE` | `qwen3vl_8b_int8_convrot.safetensors` | Text encoder file in ComfyUI |
 | `STATIC_DIR` | unset | Built frontend to serve at `/` |
 | `COOKIE_SECURE` | `1` | Set `0` only for plain-http testing with curl |
+| `WARMUP` | `0` | `1` = load the models with a hidden 1-step job at startup (the notebook sets it) |
 
-## API (M2)
+## API
 
 All routes except `POST /api/auth` need the session cookie or `Authorization: Bearer <key>`.
 
@@ -60,4 +61,6 @@ All routes except `POST /api/auth` need the session cookie or `Authorization: Be
 | POST | `/api/jobs` | 201 Job; 409 busy; 422 invalid; 404 unknown `sourceImageId` |
 | GET | `/api/jobs` | Newest first |
 | GET | `/api/jobs/{id}` | One job with its images |
+| POST | `/api/jobs/{id}/cancel` | Stops the running job, keeps finished images; 409 if not running |
 | GET | `/images/{filename}` | PNG |
+| WS | `/api/ws` | Events: `status` (warm-up), `job` (state + countdown), `preview` (JPEG data URL after each step). Closes with 4401 / 4429 on bad auth |

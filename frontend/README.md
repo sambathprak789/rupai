@@ -38,10 +38,11 @@ npm run build         # -> dist/
 
 ```
 src/
-├── components/ui/      shadcn/ui components (button, card, input, label, textarea, toggle-group, badge, sonner)
+├── components/ui/      shadcn/ui components (badge, button, card, collapsible, dialog, input, label, progress, slider, sonner, textarea, toggle-group)
 ├── features/
 │   ├── auth/           useSession (key, cookie, health polling) + KeyScreen
-│   ├── generate/       GenerateForm, ResultPanel, useGenerate, formValues
+│   ├── gallery/        Gallery (session history), Lightbox, ImageActions (Reuse, Render in Quality, Download)
+│   ├── generate/       GenerateForm, ResultPanel, useGenerate (REST + WebSocket), useCountdown, formValues
 │   └── status/         StatusScreen (connecting / backend offline / engine not ready / blocked)
 ├── lib/                api client, types (mirror of backend models), utils
 ├── App.tsx             layout: header + 360px sticky form + results

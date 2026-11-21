@@ -1,4 +1,6 @@
-import { useCallback, useState } from 'react'
+import { useCallback, useMemo, useState } from 'react'
+import { Loader2 } from 'lucide-react'
+import { toast } from 'sonner'
 
 import { Badge } from '@/components/ui/badge'
 import { Toaster } from '@/components/ui/sonner'
@@ -8,12 +10,64 @@ import { DEFAULT_FORM, parseSeed, type FormValues } from '@/features/generate/fo
 import { GenerateForm } from '@/features/generate/GenerateForm'
 import { ResultPanel } from '@/features/generate/ResultPanel'
 import { useGenerate } from '@/features/generate/useGenerate'
+import { Gallery } from '@/features/gallery/Gallery'
+import { buildIndex } from '@/features/gallery/imageIndex'
+import { Lightbox } from '@/features/gallery/Lightbox'
 import { StatusScreen } from '@/features/status/StatusScreen'
-import type { Health } from '@/lib/types'
+import type { GeneratedImage, Health } from '@/lib/types'
 
 function Workspace({ health, onAuthLost }: { health: Health; onAuthLost: () => void }) {
   const [form, setForm] = useState<FormValues>(DEFAULT_FORM)
-  const { job, preview, running, submitting, generate, cancel } = useGenerate(onAuthLost)
+  const [openImageId, setOpenImageId] = useState<string | null>(null)
+  const { job, jobs, preview, running, warming, submitting, generate, cancel } = useGenerate(onAuthLost)
+  const index = useMemo(() => buildIndex(jobs), [jobs])
+  const busy = running || submitting
+
+  /** Reuse (spec Flow 4): this image's prompt, mode, size, seed and settings go back into the form */
+  function reuse(image: GeneratedImage) {
+    const src = index.jobById.get(image.jobId)
+    if (!src) return
+    setForm((f) => ({
+      ...f,
+      mode: src.mode,
+      prompt: src.prompt,
+      negativePrompt: src.negativePrompt.trim() ? src.negativePrompt : '',
+      aspect: src.aspect,
+      seed: String(image.seed),
+      count: 1,
+      ...(src.mode === 'quality' ? { steps: src.steps, cfg: src.cfg } : {}),
+    }))
+    window.scrollTo({ top: 0, behavior: 'smooth' })
+    toast.success('Settings loaded into the form')
+  }
+
+  /** Render in Quality (spec Flow 3): same prompt, seed and size; Quality mode; starts right away */
+  function renderInQuality(image: GeneratedImage) {
+    const src = index.jobById.get(image.jobId)
+    if (!src) return
+    setForm((f) => ({
+      ...f,
+      mode: 'quality',
+      prompt: src.prompt,
+      aspect: src.aspect,
+      seed: String(image.seed),
+      count: 1,
+    }))
+    void generate({
+      mode: 'quality',
+      prompt: src.prompt,
+      negativePrompt: form.negativePrompt || src.negativePrompt,
+      aspect: src.aspect,
+      baseSeed: image.seed,
+      steps: form.steps,
+      cfg: form.cfg,
+      count: 1,
+      sourceImageId: image.id,
+    })
+    window.scrollTo({ top: 0, behavior: 'smooth' })
+  }
+
+  const actions = { onReuse: reuse, onRenderQuality: renderInQuality, busy }
 
   function onSubmit(v: FormValues) {
     const quality = v.mode === 'quality'
@@ -36,6 +90,11 @@ function Workspace({ health, onAuthLost }: { health: Health; onAuthLost: () => v
           Rup<span className="text-primary">AI</span>
         </span>
         <div className="flex items-center gap-2 text-xs text-muted-foreground">
+          {(warming || health.warming) && (
+            <Badge variant="outline" className="gap-1.5" role="status">
+              <Loader2 className="animate-spin" /> Warming up…
+            </Badge>
+          )}
           {health.mock && <Badge variant="outline">Mock</Badge>}
           <span className="hidden sm:inline">{health.modelQuant}</span>
           {health.vramTotalGb && (
@@ -53,15 +112,17 @@ function Workspace({ health, onAuthLost }: { health: Health; onAuthLost: () => v
             values={form}
             onChange={setForm}
             onSubmit={onSubmit}
-            disabled={running || submitting}
+            disabled={busy}
             running={running}
             onCancel={cancel}
           />
         </aside>
-        <main className="min-w-0 flex-1">
-          <ResultPanel job={job} preview={preview} />
+        <main className="grid min-w-0 flex-1 gap-8">
+          <ResultPanel job={job} preview={preview} onOpen={setOpenImageId} actions={actions} />
+          <Gallery index={index} hideJobId={job?.id ?? null} onOpen={setOpenImageId} />
         </main>
       </div>
+      <Lightbox imageId={openImageId} index={index} onSelect={setOpenImageId} {...actions} />
     </div>
   )
 }
