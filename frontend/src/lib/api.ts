@@ -52,4 +52,5 @@ export const api = {
   listJobs: () => request<Job[]>('/api/jobs'),
   getJob: (id: string) => request<Job>(`/api/jobs/${encodeURIComponent(id)}`),
   createJob: (body: JobCreate) => request<Job>('/api/jobs', { method: 'POST', body: JSON.stringify(body) }),
+  cancelJob: (id: string) => request<Job>(`/api/jobs/${encodeURIComponent(id)}/cancel`, { method: 'POST' }),
 }

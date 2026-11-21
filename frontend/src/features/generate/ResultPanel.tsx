@@ -125,7 +125,11 @@ export function ResultPanel({ job, preview }: { job: Job | null; preview: Previe
           </span>
         )}
         {job.status === 'failed' && <span className="text-sm text-destructive">{job.error}</span>}
-        {job.status === 'cancelled' && <span className="text-sm text-muted-foreground">Cancelled</span>}
+        {job.status === 'cancelled' && (
+          <span className="text-sm text-muted-foreground" role="status">
+            Cancelled · kept {job.images.length} of {job.count} {job.count === 1 ? 'image' : 'images'}
+          </span>
+        )}
       </div>
 
       <div className={job.count > 1 ? 'grid items-start gap-4 sm:grid-cols-2' : 'flex flex-col items-start gap-4'}>

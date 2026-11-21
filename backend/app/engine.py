@@ -49,6 +49,8 @@ class Engine(Protocol):
 
     async def health(self) -> dict: ...
 
+    async def interrupt(self) -> None: ...
+
     async def close(self) -> None: ...
 
 
@@ -59,6 +61,7 @@ class ComfyEngine:
         self.output_dir = output_dir
         self.builder = builder
         self.http = httpx.AsyncClient(base_url=self.base, timeout=30)
+        self.current_prompt_id: str | None = None
 
     async def close(self) -> None:
         await self.http.aclose()
@@ -78,23 +81,38 @@ class ComfyEngine:
         }
 
     async def interrupt(self) -> None:
-        await self.http.post("/interrupt")
+        """Stops the running prompt. Targeted, so a late call cannot stop the next job."""
+        prompt_id = self.current_prompt_id
+        if prompt_id is None:
+            return
+        try:
+            # Still waiting in ComfyUI's queue: remove it. Already running: interrupt it.
+            await self.http.post("/queue", json={"delete": [prompt_id]}, timeout=10)
+            await self.http.post("/interrupt", json={"prompt_id": prompt_id}, timeout=10)
+        except httpx.HTTPError:
+            pass  # ComfyUI gone: nothing left to stop
 
     async def render(
         self, params: RenderParams, on_step: StepCallback, on_preview: PreviewCallback | None = None
     ) -> Path:
         client_id = uuid.uuid4().hex
+        # Our own prompt id, known before the request, so Cancel works even during the POST
+        prompt_id = str(uuid.uuid4())
         workflow = self.builder.build(params)
         try:
             async with websockets.connect(f"{self.ws_base}/ws?clientId={client_id}", max_size=None) as ws:
-                r = await self.http.post("/prompt", json={"prompt": workflow, "client_id": client_id})
+                self.current_prompt_id = prompt_id
+                r = await self.http.post(
+                    "/prompt", json={"prompt": workflow, "client_id": client_id, "prompt_id": prompt_id}
+                )
                 if r.status_code != 200:
                     raise EngineError(friendly_error(_prompt_error(r)))
-                prompt_id = r.json()["prompt_id"]
                 await _wait_until_done(ws, prompt_id, on_step, on_preview)
             hist = (await self.http.get(f"/history/{prompt_id}")).json()[prompt_id]
         except (httpx.HTTPError, OSError, websockets.WebSocketException) as e:
             raise EngineError(friendly_error(f"connection error: {e}")) from e
+        finally:
+            self.current_prompt_id = None
         img = hist["outputs"]["9"]["images"][0]
         return self.output_dir / img.get("subfolder", "") / img["filename"]
 

@@ -17,7 +17,7 @@ from .auth import COOKIE_NAME, Authenticator, FailureLimiter
 from .config import Settings
 from .engine import ComfyEngine, Engine, MockEngine
 from .models import AuthRequest, Health, Job, JobCreate
-from .service import JobConflict, JobService, NotFound
+from .service import JobConflict, JobService, NotFound, NotRunning
 from .workflow import WorkflowBuilder
 
 log = logging.getLogger("rupai")
@@ -123,6 +123,20 @@ def create_app(settings: Settings | None = None, engine: Engine | None = None) -
             return service.get_job(job_id)
         except NotFound as e:
             raise HTTPException(status.HTTP_404_NOT_FOUND, str(e)) from e
+
+    @app.post(
+        "/api/jobs/{job_id}/cancel",
+        response_model=Job,
+        response_model_by_alias=True,
+        dependencies=[Depends(require_auth)],
+    )
+    async def cancel_job(job_id: str) -> Job:
+        try:
+            return await service.cancel(job_id)
+        except NotFound as e:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, str(e)) from e
+        except NotRunning as e:
+            raise HTTPException(status.HTTP_409_CONFLICT, str(e)) from e
 
     @app.websocket("/api/ws")
     async def events(ws: WebSocket) -> None:

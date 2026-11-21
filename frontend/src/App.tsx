@@ -13,7 +13,7 @@ import type { Health } from '@/lib/types'
 
 function Workspace({ health, onAuthLost }: { health: Health; onAuthLost: () => void }) {
   const [form, setForm] = useState<FormValues>(DEFAULT_FORM)
-  const { job, preview, running, submitting, generate } = useGenerate(onAuthLost)
+  const { job, preview, running, submitting, generate, cancel } = useGenerate(onAuthLost)
 
   function onSubmit(v: FormValues) {
     const quality = v.mode === 'quality'
@@ -25,7 +25,7 @@ function Workspace({ health, onAuthLost }: { health: Health; onAuthLost: () => v
       baseSeed: parseSeed(v.seed) ?? undefined,
       steps: quality ? v.steps : undefined,
       cfg: quality ? v.cfg : undefined,
-      count: 1,
+      count: quality ? 1 : v.count,
     })
   }
 
@@ -49,7 +49,14 @@ function Workspace({ health, onAuthLost }: { health: Health; onAuthLost: () => v
 
       <div className="mx-auto flex max-w-[1600px] flex-col gap-6 p-4 md:flex-row md:items-start md:p-6">
         <aside className="w-full shrink-0 rounded-xl border bg-card p-5 md:sticky md:top-20 md:w-[360px]">
-          <GenerateForm values={form} onChange={setForm} onSubmit={onSubmit} disabled={running || submitting} />
+          <GenerateForm
+            values={form}
+            onChange={setForm}
+            onSubmit={onSubmit}
+            disabled={running || submitting}
+            running={running}
+            onCancel={cancel}
+          />
         </aside>
         <main className="min-w-0 flex-1">
           <ResultPanel job={job} preview={preview} />

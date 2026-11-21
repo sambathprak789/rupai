@@ -29,6 +29,10 @@ class NotFound(Exception):
     """Unknown job or image id (404)."""
 
 
+class NotRunning(Exception):
+    """Cancel on a job that already finished (409)."""
+
+
 class JobService:
     def __init__(self, engine: Engine, output_dir: Path, fast_lora: str):
         self.engine = engine
@@ -111,6 +115,18 @@ class JobService:
         self.jobs[job.id] = job
         self.active_id = job.id
         self._tasks[job.id] = asyncio.create_task(self._run(job))
+        return job
+
+    async def cancel(self, job_id: str) -> Job:
+        """Stops the job: interrupts ComfyUI, keeps the images that are already done (spec 5.3)."""
+        job = self.get_job(job_id)
+        if job.id != self.active_id:
+            raise NotRunning(f"job {job_id} is not running")
+        await self.engine.interrupt()
+        task = self._tasks.get(job.id)
+        if task and not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
         return job
 
     async def shutdown(self) -> None:

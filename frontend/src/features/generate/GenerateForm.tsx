@@ -1,7 +1,9 @@
-import { useState, type FormEvent, type KeyboardEvent } from 'react'
+import { useEffect, useState, type FormEvent, type KeyboardEvent } from 'react'
 import {
   ChevronDown,
+  CircleStop,
   Dices,
+  Images,
   RectangleHorizontal,
   RectangleVertical,
   Sparkles,
@@ -20,6 +22,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import {
   ASPECTS,
+  FAST_COUNTS,
   FAST_LOCKED,
   NEGATIVE_MAX,
   PROMPT_MAX,
@@ -38,9 +41,39 @@ interface Props {
   onChange: (values: FormValues) => void
   onSubmit: (values: FormValues) => void
   disabled: boolean
+  running: boolean
+  onCancel: () => Promise<void>
 }
 
-export function GenerateForm({ values, onChange, onSubmit, disabled }: Props) {
+/** Two clicks within 4 s, so a long Quality job is not lost by accident. */
+function CancelButton({ onCancel }: { onCancel: () => Promise<void> }) {
+  const [armed, setArmed] = useState(false)
+  const [busy, setBusy] = useState(false)
+  useEffect(() => {
+    if (!armed) return
+    const id = window.setTimeout(() => setArmed(false), 4000)
+    return () => window.clearTimeout(id)
+  }, [armed])
+
+  async function click() {
+    if (!armed) {
+      setArmed(true)
+      return
+    }
+    setBusy(true)
+    await onCancel()
+    setBusy(false)
+    setArmed(false)
+  }
+
+  return (
+    <Button type="button" variant={armed ? 'destructive' : 'outline'} size="lg" onClick={click} disabled={busy}>
+      <CircleStop /> {busy ? 'Cancelling…' : armed ? 'Click again to cancel' : 'Cancel'}
+    </Button>
+  )
+}
+
+export function GenerateForm({ values, onChange, onSubmit, disabled, running, onCancel }: Props) {
   const set = <K extends keyof FormValues>(key: K, value: FormValues[K]) => onChange({ ...values, [key]: value })
   const [advancedOpen, setAdvancedOpen] = useState(false)
   const seedInvalid = Number.isNaN(parseSeed(values.seed))
@@ -76,7 +109,7 @@ export function GenerateForm({ values, onChange, onSubmit, disabled }: Props) {
         <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
           <Timer className="size-3.5" />
           {fast
-            ? '8 steps, ~3–4 min per image on T4'
+            ? `8 steps, ~3–4 min per image on T4${values.count > 1 ? ` (~${values.count * 3}–${values.count * 4} min total)` : ''}`
             : `${values.steps} steps, 1 image, ~${Math.round((values.steps * 38.6 + 45) / 60)} min on T4`}
         </p>
       </div>
@@ -132,6 +165,28 @@ export function GenerateForm({ values, onChange, onSubmit, disabled }: Props) {
             )
           })}
         </ToggleGroup>
+      </div>
+
+      <div className="grid gap-2">
+        <Label>Images</Label>
+        {fast ? (
+          <ToggleGroup
+            type="single"
+            value={String(values.count)}
+            onValueChange={(v) => v && set('count', Number(v))}
+            aria-label="Images"
+          >
+            {FAST_COUNTS.map((n) => (
+              <ToggleGroupItem key={n} value={String(n)}>
+                {n}
+              </ToggleGroupItem>
+            ))}
+          </ToggleGroup>
+        ) : (
+          <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
+            <Images className="size-3.5" /> Quality renders 1 image per job.
+          </p>
+        )}
       </div>
 
       <Collapsible open={advancedOpen || seedInvalid} onOpenChange={setAdvancedOpen} className="grid gap-4">
@@ -230,9 +285,13 @@ export function GenerateForm({ values, onChange, onSubmit, disabled }: Props) {
         </CollapsibleContent>
       </Collapsible>
 
-      <Button type="submit" size="lg" disabled={!canSubmit}>
-        <Sparkles /> Generate
-      </Button>
+      {running ? (
+        <CancelButton onCancel={onCancel} />
+      ) : (
+        <Button type="submit" size="lg" disabled={!canSubmit}>
+          <Sparkles /> Generate{fast && values.count > 1 ? ` ${values.count} images` : ''}
+        </Button>
+      )}
       <p className="-mt-3 text-center text-xs text-muted-foreground">Ctrl + Enter in the prompt also works</p>
     </form>
   )

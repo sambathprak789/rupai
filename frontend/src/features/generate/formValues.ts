@@ -5,6 +5,8 @@ export interface FormValues {
   prompt: string
   negativePrompt: string
   aspect: Aspect
+  /** Images per job: 1-4 in Fast, always 1 in Quality */
+  count: number
   /** Empty = random seed for each job */
   seed: string
   /** Quality mode only (Fast is locked to 8 steps, CFG 1) */
@@ -17,6 +19,7 @@ export const DEFAULT_FORM: FormValues = {
   prompt: '',
   negativePrompt: '',
   aspect: '1:1',
+  count: 1,
   seed: '',
   steps: QUALITY_STEPS.default,
   cfg: QUALITY_CFG.default,

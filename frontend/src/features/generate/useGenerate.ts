@@ -111,6 +111,17 @@ export function useGenerate(onAuthLost: () => void) {
     [acceptJob],
   )
 
+  const cancel = useCallback(async () => {
+    if (!job) return
+    try {
+      acceptJob(await api.cancelJob(job.id))
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 409)
+        acceptJob(await api.getJob(job.id)) // it just finished
+      else toast.error(e instanceof ApiError ? e.message : 'Could not cancel')
+    }
+  }, [job, acceptJob])
+
   const currentPreview = preview && job && preview.jobId === job.id ? preview : null
-  return { job, preview: currentPreview, running, submitting, connected, generate }
+  return { job, preview: currentPreview, running, submitting, connected, generate, cancel }
 }
