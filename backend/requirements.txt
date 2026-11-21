@@ -1,0 +1,7 @@
+fastapi>=0.165,<1
+uvicorn[standard]>=0.54,<1
+pydantic>=2.14,<3
+httpx>=0.28,<1
+websockets>=17,<18
+pillow>=10.1
+psutil>=5.9
