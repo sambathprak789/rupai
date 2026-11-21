@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 
 import psutil
-from fastapi import Depends, FastAPI, HTTPException, Request, Response, status
+from fastapi import Depends, FastAPI, HTTPException, Request, Response, WebSocket, WebSocketDisconnect, status
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -122,6 +123,40 @@ def create_app(settings: Settings | None = None, engine: Engine | None = None) -
             return service.get_job(job_id)
         except NotFound as e:
             raise HTTPException(status.HTTP_404_NOT_FOUND, str(e)) from e
+
+    @app.websocket("/api/ws")
+    async def events(ws: WebSocket) -> None:
+        """Live job state and step previews (M5). Same auth as the REST API (cookie or Bearer)."""
+        try:
+            auth.check(ws)
+        except HTTPException as e:
+            # Accept first so the browser receives the code: 4401 = need key, 4429 = blocked
+            await ws.accept()
+            await ws.close(code=4000 + e.status_code)
+            return
+        await ws.accept()
+        queue = service.subscribe()
+        try:
+            for event in service.snapshot():
+                await ws.send_json(event)
+
+            async def pump() -> None:
+                while True:
+                    await ws.send_json(await queue.get())
+
+            async def drain() -> None:
+                while True:
+                    await ws.receive_text()  # client sends nothing; this notices disconnects
+
+            tasks = [asyncio.create_task(pump()), asyncio.create_task(drain())]
+            _, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+            for t in pending:
+                t.cancel()
+            for t in tasks:
+                with suppress(asyncio.CancelledError, WebSocketDisconnect, RuntimeError):
+                    await t
+        finally:
+            service.unsubscribe(queue)
 
     @app.get("/images/{filename}", dependencies=[Depends(require_auth)])
     async def get_image(filename: str) -> FileResponse:

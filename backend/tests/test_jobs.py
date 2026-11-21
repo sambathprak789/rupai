@@ -139,7 +139,7 @@ class FailingEngine:
     def __init__(self, message: str):
         self.message = message
 
-    async def render(self, params: RenderParams, on_step):
+    async def render(self, params: RenderParams, on_step, on_preview=None):
         on_step(1, params.steps)
         raise EngineError(self.message)
 
@@ -161,7 +161,7 @@ def test_engine_error_marks_job_failed_and_frees_slot(tmp_path):
 
 
 class CrashingEngine(FailingEngine):
-    async def render(self, params, on_step):
+    async def render(self, params, on_step, on_preview=None):
         await asyncio.sleep(0)
         raise RuntimeError("boom")
 

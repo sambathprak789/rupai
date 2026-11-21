@@ -10,6 +10,6 @@ export default defineConfig(({ mode }) => {
   return {
     plugins: [react(), tailwindcss()],
     resolve: { alias: { '@': `${import.meta.dirname}/src` } },
-    server: { proxy: { '/api': proxy, '/images': proxy } },
+    server: { proxy: { '/api': { ...proxy, ws: true }, '/images': proxy } },
   }
 })

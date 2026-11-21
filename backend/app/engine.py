@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import json
+import random
 import uuid
 from collections.abc import Callable
 from pathlib import Path
@@ -17,6 +19,11 @@ from PIL import ImageDraw
 from .workflow import RenderParams, WorkflowBuilder
 
 StepCallback = Callable[[int, int], None]  # (step, total)
+PreviewCallback = Callable[[bytes, str], None]  # (image bytes, mime type)
+
+# ComfyUI binary WebSocket frames: 4-byte event type, then (for previews) 4-byte image format
+BINARY_PREVIEW_IMAGE = 1
+PREVIEW_MIME = {1: "image/jpeg", 2: "image/png"}
 
 # ComfyUI can stay silent for minutes while loading models on a T4
 WS_IDLE_TIMEOUT_S = 900
@@ -36,7 +43,9 @@ def friendly_error(raw: str) -> str:
 
 
 class Engine(Protocol):
-    async def render(self, params: RenderParams, on_step: StepCallback) -> Path: ...
+    async def render(
+        self, params: RenderParams, on_step: StepCallback, on_preview: PreviewCallback | None = None
+    ) -> Path: ...
 
     async def health(self) -> dict: ...
 
@@ -71,7 +80,9 @@ class ComfyEngine:
     async def interrupt(self) -> None:
         await self.http.post("/interrupt")
 
-    async def render(self, params: RenderParams, on_step: StepCallback) -> Path:
+    async def render(
+        self, params: RenderParams, on_step: StepCallback, on_preview: PreviewCallback | None = None
+    ) -> Path:
         client_id = uuid.uuid4().hex
         workflow = self.builder.build(params)
         try:
@@ -80,7 +91,7 @@ class ComfyEngine:
                 if r.status_code != 200:
                     raise EngineError(friendly_error(_prompt_error(r)))
                 prompt_id = r.json()["prompt_id"]
-                await _wait_until_done(ws, prompt_id, on_step)
+                await _wait_until_done(ws, prompt_id, on_step, on_preview)
             hist = (await self.http.get(f"/history/{prompt_id}")).json()[prompt_id]
         except (httpx.HTTPError, OSError, websockets.WebSocketException) as e:
             raise EngineError(friendly_error(f"connection error: {e}")) from e
@@ -102,14 +113,28 @@ def _prompt_error(r: httpx.Response) -> str:
     return "; ".join([err.get("message", "invalid prompt"), *details])
 
 
-async def _wait_until_done(ws, prompt_id: str, on_step: StepCallback) -> None:
+def parse_preview(frame: bytes) -> tuple[bytes, str] | None:
+    """Returns (image bytes, mime) for a ComfyUI PREVIEW_IMAGE frame, else None."""
+    if len(frame) < 8 or int.from_bytes(frame[0:4], "big") != BINARY_PREVIEW_IMAGE:
+        return None
+    mime = PREVIEW_MIME.get(int.from_bytes(frame[4:8], "big"))
+    return (bytes(frame[8:]), mime) if mime else None
+
+
+async def _wait_until_done(
+    ws, prompt_id: str, on_step: StepCallback, on_preview: PreviewCallback | None = None
+) -> None:
     while True:
         try:
             raw = await asyncio.wait_for(ws.recv(), timeout=WS_IDLE_TIMEOUT_S)
         except TimeoutError as e:
             raise EngineError("ComfyUI stopped responding") from e
         if not isinstance(raw, str):
-            continue  # binary preview frames
+            # Only one job runs at a time, so a preview belongs to the current prompt
+            preview = parse_preview(raw)
+            if preview and on_preview:
+                on_preview(*preview)
+            continue
         msg = json.loads(raw)
         data = msg.get("data", {})
         if data.get("prompt_id") not in (None, prompt_id):
@@ -141,10 +166,14 @@ class MockEngine:
     async def interrupt(self) -> None:
         pass
 
-    async def render(self, params: RenderParams, on_step: StepCallback) -> Path:
+    async def render(
+        self, params: RenderParams, on_step: StepCallback, on_preview: PreviewCallback | None = None
+    ) -> Path:
         for step in range(1, params.steps + 1):
             await asyncio.sleep(self.step_delay)
             on_step(step, params.steps)
+            if on_preview:
+                on_preview(_mock_preview(params, step / params.steps), "image/jpeg")
         path = self.output_dir / f"{params.filename_prefix}_00001_.png"
         await asyncio.to_thread(_draw_placeholder, path, params)
         return path
@@ -164,3 +193,16 @@ def _draw_placeholder(path: Path, p: RenderParams) -> None:
         d.text((32, 32 + i * 28), line, fill=(255, 255, 255))
     path.parent.mkdir(parents=True, exist_ok=True)
     img.save(path, "PNG")
+
+
+def _mock_preview(p: RenderParams, done: float) -> bytes:
+    """Noise that fades into the final placeholder colour, like a real denoising preview."""
+    hue = int(p.seed % 360 / 360 * 255)
+    w, h = (64, round(64 * p.height / p.width)) if p.width >= p.height else (round(64 * p.width / p.height), 64)
+    rng = random.Random(p.seed)
+    base = PILImage.new("HSV", (w, h), (hue, 90, 70)).convert("RGB")
+    noise = PILImage.frombytes("RGB", (w, h), bytes(rng.randrange(256) for _ in range(w * h * 3)))
+    img = PILImage.blend(noise, base, done).resize((w * 8, h * 8), PILImage.Resampling.BILINEAR)
+    buf = io.BytesIO()
+    img.save(buf, "JPEG", quality=80)
+    return buf.getvalue()

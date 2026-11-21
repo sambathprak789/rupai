@@ -1,13 +1,35 @@
-import type { FormEvent, KeyboardEvent } from 'react'
-import { RectangleHorizontal, RectangleVertical, Sparkles, Square, Timer, Zap } from 'lucide-react'
+import { useState, type FormEvent, type KeyboardEvent } from 'react'
+import {
+  ChevronDown,
+  Dices,
+  RectangleHorizontal,
+  RectangleVertical,
+  Sparkles,
+  Square,
+  Timer,
+  X,
+  Zap,
+} from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
+import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { Slider } from '@/components/ui/slider'
 import { Textarea } from '@/components/ui/textarea'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
-import { ASPECTS, NEGATIVE_MAX, PROMPT_MAX, type Aspect, type Mode } from '@/lib/types'
+import {
+  ASPECTS,
+  FAST_LOCKED,
+  NEGATIVE_MAX,
+  PROMPT_MAX,
+  QUALITY_CFG,
+  QUALITY_STEPS,
+  type Aspect,
+  type Mode,
+} from '@/lib/types'
 
-import type { FormValues } from './formValues'
+import { parseSeed, randomSeed, type FormValues } from './formValues'
 
 const ASPECT_ICON = { '1:1': Square, '16:9': RectangleHorizontal, '9:16': RectangleVertical } as const
 
@@ -20,7 +42,9 @@ interface Props {
 
 export function GenerateForm({ values, onChange, onSubmit, disabled }: Props) {
   const set = <K extends keyof FormValues>(key: K, value: FormValues[K]) => onChange({ ...values, [key]: value })
-  const canSubmit = !disabled && values.prompt.trim().length > 0
+  const [advancedOpen, setAdvancedOpen] = useState(false)
+  const seedInvalid = Number.isNaN(parseSeed(values.seed))
+  const canSubmit = !disabled && values.prompt.trim().length > 0 && !seedInvalid
   const fast = values.mode === 'fast'
 
   function submit(e?: FormEvent) {
@@ -51,7 +75,9 @@ export function GenerateForm({ values, onChange, onSubmit, disabled }: Props) {
         </ToggleGroup>
         <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
           <Timer className="size-3.5" />
-          {fast ? '8 steps, ~3–4 min per image on T4' : '35 steps, 1 image, ~23 min on T4'}
+          {fast
+            ? '8 steps, ~3–4 min per image on T4'
+            : `${values.steps} steps, 1 image, ~${Math.round((values.steps * 38.6 + 45) / 60)} min on T4`}
         </p>
       </div>
 
@@ -107,6 +133,102 @@ export function GenerateForm({ values, onChange, onSubmit, disabled }: Props) {
           })}
         </ToggleGroup>
       </div>
+
+      <Collapsible open={advancedOpen || seedInvalid} onOpenChange={setAdvancedOpen} className="grid gap-4">
+        <CollapsibleTrigger asChild>
+          <Button type="button" variant="ghost" size="sm" className="justify-between px-2 text-muted-foreground">
+            Advanced
+            <ChevronDown className={advancedOpen ? 'rotate-180 transition-transform' : 'transition-transform'} />
+          </Button>
+        </CollapsibleTrigger>
+        <CollapsibleContent className="grid gap-5">
+          <div className="grid gap-2">
+            <Label htmlFor="seed">Seed</Label>
+            <div className="flex gap-2">
+              <Input
+                id="seed"
+                inputMode="numeric"
+                placeholder="Random"
+                value={values.seed}
+                onChange={(e) => set('seed', e.target.value)}
+                aria-invalid={seedInvalid}
+              />
+              <Button
+                type="button"
+                variant="outline"
+                size="icon"
+                title="Random seed"
+                onClick={() => set('seed', randomSeed())}
+              >
+                <Dices />
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="icon"
+                title="Clear (random each time)"
+                onClick={() => set('seed', '')}
+                disabled={!values.seed}
+              >
+                <X />
+              </Button>
+            </div>
+            <p className={seedInvalid ? 'text-xs text-destructive' : 'text-xs text-muted-foreground'}>
+              {seedInvalid ? 'Whole number from 0 to 4294967295.' : 'Empty = a new random seed every time.'}
+            </p>
+          </div>
+
+          {fast ? (
+            <p className="text-xs text-muted-foreground">
+              Fast mode is locked to {FAST_LOCKED.steps} steps and CFG {FAST_LOCKED.cfg.toFixed(1)}.
+            </p>
+          ) : (
+            <>
+              <div className="grid gap-3">
+                <div className="flex items-baseline justify-between">
+                  <Label>Steps</Label>
+                  <span className="text-sm tabular-nums" data-testid="steps-value">
+                    {values.steps}
+                  </span>
+                </div>
+                <Slider
+                  aria-label="Steps"
+                  min={QUALITY_STEPS.min}
+                  max={QUALITY_STEPS.max}
+                  step={1}
+                  value={[values.steps]}
+                  onValueChange={([v]) => set('steps', v)}
+                />
+              </div>
+              <div className="grid gap-3">
+                <div className="flex items-baseline justify-between">
+                  <Label>CFG</Label>
+                  <span className="text-sm tabular-nums" data-testid="cfg-value">
+                    {values.cfg.toFixed(1)}
+                  </span>
+                </div>
+                <Slider
+                  aria-label="CFG"
+                  min={QUALITY_CFG.min}
+                  max={QUALITY_CFG.max}
+                  step={QUALITY_CFG.step}
+                  value={[values.cfg]}
+                  onValueChange={([v]) => set('cfg', v)}
+                />
+              </div>
+              <Button
+                type="button"
+                variant="link"
+                size="sm"
+                className="h-auto justify-start p-0 text-xs"
+                onClick={() => onChange({ ...values, steps: QUALITY_STEPS.default, cfg: QUALITY_CFG.default })}
+              >
+                Reset to {QUALITY_STEPS.default} steps, CFG {QUALITY_CFG.default.toFixed(1)}
+              </Button>
+            </>
+          )}
+        </CollapsibleContent>
+      </Collapsible>
 
       <Button type="submit" size="lg" disabled={!canSubmit}>
         <Sparkles /> Generate

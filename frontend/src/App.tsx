@@ -1,26 +1,30 @@
-import { useState } from 'react'
+import { useCallback, useState } from 'react'
 
 import { Badge } from '@/components/ui/badge'
 import { Toaster } from '@/components/ui/sonner'
 import { KeyScreen } from '@/features/auth/KeyScreen'
 import { useSession } from '@/features/auth/useSession'
-import { DEFAULT_FORM, type FormValues } from '@/features/generate/formValues'
+import { DEFAULT_FORM, parseSeed, type FormValues } from '@/features/generate/formValues'
 import { GenerateForm } from '@/features/generate/GenerateForm'
 import { ResultPanel } from '@/features/generate/ResultPanel'
 import { useGenerate } from '@/features/generate/useGenerate'
 import { StatusScreen } from '@/features/status/StatusScreen'
 import type { Health } from '@/lib/types'
 
-function Workspace({ health }: { health: Health }) {
+function Workspace({ health, onAuthLost }: { health: Health; onAuthLost: () => void }) {
   const [form, setForm] = useState<FormValues>(DEFAULT_FORM)
-  const { job, running, submitting, generate } = useGenerate()
+  const { job, preview, running, submitting, generate } = useGenerate(onAuthLost)
 
   function onSubmit(v: FormValues) {
+    const quality = v.mode === 'quality'
     void generate({
       mode: v.mode,
       prompt: v.prompt,
-      negativePrompt: v.mode === 'quality' ? v.negativePrompt : undefined,
+      negativePrompt: quality ? v.negativePrompt : undefined,
       aspect: v.aspect,
+      baseSeed: parseSeed(v.seed) ?? undefined,
+      steps: quality ? v.steps : undefined,
+      cfg: quality ? v.cfg : undefined,
       count: 1,
     })
   }
@@ -48,7 +52,7 @@ function Workspace({ health }: { health: Health }) {
           <GenerateForm values={form} onChange={setForm} onSubmit={onSubmit} disabled={running || submitting} />
         </aside>
         <main className="min-w-0 flex-1">
-          <ResultPanel job={job} />
+          <ResultPanel job={job} preview={preview} />
         </main>
       </div>
     </div>
@@ -57,11 +61,12 @@ function Workspace({ health }: { health: Health }) {
 
 export default function App() {
   const { state, submitKey, refresh } = useSession()
+  const onAuthLost = useCallback(() => void refresh(), [refresh])
 
   let content
   switch (state.kind) {
     case 'ready':
-      content = <Workspace health={state.health} />
+      content = <Workspace health={state.health} onAuthLost={onAuthLost} />
       break
     case 'need-key':
       content = <KeyScreen error={state.error} onSubmit={submitKey} />

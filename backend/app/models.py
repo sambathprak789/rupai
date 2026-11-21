@@ -103,6 +103,11 @@ class Progress(ApiModel):
     image_index: int = 0
     step: int = 0
     total_steps: int = 0
+    # M5 countdown: the browser counts down from *_eta_s, starting at updated_at
+    seconds_per_step: float | None = None
+    image_eta_s: float | None = None
+    job_eta_s: float | None = None
+    updated_at: datetime | None = None
 
 
 class Image(ApiModel):

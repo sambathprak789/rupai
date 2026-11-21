@@ -3,15 +3,20 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import logging
 import os
 import secrets
+import time
 import uuid
 from pathlib import Path
 
 from .engine import Engine, EngineError
+from .eta import EtaModel, ImageTimer
 from .models import SEED_MAX, SIZES, Image, Job, JobCreate, Mode, Status, now
 from .workflow import RenderParams
+
+SUBSCRIBER_QUEUE = 64
 
 log = logging.getLogger("rupai")
 
@@ -33,7 +38,41 @@ class JobService:
         self.images: dict[str, Image] = {}
         self.active_id: str | None = None
         self._tasks: dict[str, asyncio.Task] = {}
+        self.eta = EtaModel()
+        self.latest_preview: dict | None = None  # last preview event of the active job
+        self._subscribers: set[asyncio.Queue] = set()
         output_dir.mkdir(parents=True, exist_ok=True)
+
+    # ---- live events (WebSocket /api/ws) ------------------------------------------
+
+    def subscribe(self) -> asyncio.Queue:
+        q: asyncio.Queue = asyncio.Queue(maxsize=SUBSCRIBER_QUEUE)
+        self._subscribers.add(q)
+        return q
+
+    def unsubscribe(self, q: asyncio.Queue) -> None:
+        self._subscribers.discard(q)
+
+    def _publish(self, event: dict) -> None:
+        for q in self._subscribers:
+            if q.full():
+                if event["type"] == "preview":
+                    continue  # a slow browser skips previews, never job state
+                while not q.empty():
+                    q.get_nowait()
+            q.put_nowait(event)
+
+    def _publish_job(self, job: Job) -> None:
+        self._publish({"type": "job", "job": job.model_dump(by_alias=True, mode="json")})
+
+    def snapshot(self) -> list[dict]:
+        """Events a new WebSocket client needs to catch up with the active job."""
+        if self.active_id is None:
+            return []
+        events = [{"type": "job", "job": self.jobs[self.active_id].model_dump(by_alias=True, mode="json")}]
+        if self.latest_preview:
+            events.append(self.latest_preview)
+        return events
 
     @property
     def busy(self) -> bool:
@@ -79,6 +118,15 @@ class JobService:
             task.cancel()
         await asyncio.gather(*self._tasks.values(), return_exceptions=True)
 
+    def _update_eta(self, job: Job, timer: ImageTimer) -> None:
+        t = time.monotonic()
+        image_eta = timer.image_eta(t)
+        images_left = job.count - job.progress.image_index - 1
+        job.progress.seconds_per_step = round(timer.step_s(t), 1)
+        job.progress.image_eta_s = round(image_eta, 1)
+        job.progress.job_eta_s = round(image_eta + timer.remaining_images_eta(images_left), 1)
+        job.progress.updated_at = now()
+
     async def _run(self, job: Job) -> None:
         job.status = Status.RUNNING
         try:
@@ -87,6 +135,10 @@ class JobService:
                 job.progress.image_index = index
                 job.progress.step = 0
                 job.progress.total_steps = job.steps
+                self.latest_preview = None
+                timer = ImageTimer(self.eta, job.mode, job.aspect, job.steps, started=time.monotonic())
+                self._update_eta(job, timer)
+                self._publish_job(job)
                 params = RenderParams(
                     prompt=job.prompt,
                     negative_prompt=job.negative_prompt,
@@ -99,12 +151,30 @@ class JobService:
                     filename_prefix=f"tmp_{job.id}_{index}",
                 )
 
-                def on_step(step: int, total: int) -> None:
+                def on_step(step: int, total: int, timer=timer, index=index) -> None:
+                    timer.on_step(step, time.monotonic())
+                    job.progress.image_index = index
                     job.progress.step = step
                     job.progress.total_steps = total
+                    self._update_eta(job, timer)
+                    self._publish_job(job)
 
-                raw = await self.engine.render(params, on_step)
+                def on_preview(data: bytes, mime: str, index=index) -> None:
+                    event = {
+                        "type": "preview",
+                        "jobId": job.id,
+                        "imageIndex": index,
+                        "step": job.progress.step,
+                        "dataUrl": f"data:{mime};base64,{base64.b64encode(data).decode()}",
+                    }
+                    self.latest_preview = event
+                    self._publish(event)
+
+                raw = await self.engine.render(params, on_step, on_preview)
+                timer.finish(time.monotonic())
                 job.images.append(self._store_image(job, index, seed, raw))
+                self.latest_preview = None
+                self._publish_job(job)
             job.status = Status.DONE
         except asyncio.CancelledError:
             job.status = Status.CANCELLED
@@ -117,7 +187,10 @@ class JobService:
             job.error = "Internal error - run the 'Show logs' cell in the notebook"
         finally:
             job.finished_at = now()
+            job.progress.image_eta_s = job.progress.job_eta_s = None
             self.active_id = None
+            self.latest_preview = None
+            self._publish_job(job)
 
     def _store_image(self, job: Job, index: int, seed: int, raw: Path) -> Image:
         stem = f"rupai_{now():%Y%m%d-%H%M}_{job.mode.value}_seed{seed}"
