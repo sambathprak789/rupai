@@ -24,7 +24,7 @@ def post(client: TestClient, **body):
     "body",
     [
         {"prompt": "   "},
-        {"prompt": "x" * 2001},
+        {"prompt": "x" * 5001},
         {"negativePrompt": "x" * 1001},
         {"aspect": "4:3"},
         {"mode": "turbo"},
@@ -43,6 +43,12 @@ def post(client: TestClient, **body):
 )
 def test_invalid_bodies_422(authed: TestClient, body: dict):
     assert post(authed, **body).status_code == 422
+
+
+def test_prompt_at_max_length_accepted(authed: TestClient):
+    r = post(authed, prompt="x" * 5000)
+    assert r.status_code == 201
+    assert len(r.json()["prompt"]) == 5000
 
 
 def test_fast_mode_locks_steps_and_cfg(authed: TestClient):

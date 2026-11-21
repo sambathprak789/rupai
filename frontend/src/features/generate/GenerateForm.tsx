@@ -31,6 +31,7 @@ import {
   type Aspect,
   type Mode,
 } from '@/lib/types'
+import { estimateTokens } from '@/lib/tokens'
 
 import { parseSeed, randomSeed, type FormValues } from './formValues'
 
@@ -117,8 +118,12 @@ export function GenerateForm({ values, onChange, onSubmit, disabled, running, on
       <div className="grid gap-2">
         <div className="flex items-baseline justify-between">
           <Label htmlFor="prompt">Prompt</Label>
-          <span className="text-xs text-muted-foreground">
-            {values.prompt.length}/{PROMPT_MAX}
+          <span
+            className="text-xs text-muted-foreground tabular-nums"
+            title="Rough token estimate for the text encoder"
+          >
+            {values.prompt.length.toLocaleString()}/{PROMPT_MAX.toLocaleString()} · ~
+            {estimateTokens(values.prompt).toLocaleString()} tokens
           </span>
         </div>
         <Textarea

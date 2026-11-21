@@ -51,13 +51,16 @@ class ApiModel(BaseModel):
     model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
 
 
+PROMPT_MAX = 5000  # Item 5.4 (raised from 2,000 on 2026-11-21)
+
+
 class JobCreate(ApiModel):
     """Body of POST /api/jobs (Item 5.4 rules)."""
 
     model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True, extra="forbid")
 
     mode: Mode = Mode.FAST
-    prompt: Annotated[str, Field(max_length=2000)]
+    prompt: Annotated[str, Field(max_length=PROMPT_MAX)]
     negative_prompt: Annotated[str, Field(max_length=1000)] = " "
     aspect: Aspect = Aspect.SQUARE
     steps: int | None = None
